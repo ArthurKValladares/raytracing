@@ -1,0 +1,90 @@
+#ifndef MOVING_SPHERE_H
+#define MOVING_SPHERE_H
+
+class moving_sphere : public hitable {
+public:
+	moving_sphere() {}
+	moving_sphere(const vec3& c0, const vec3& c1, float t0, float t1, float r, material* mat):
+		center0(c0), center1(c1), time0(t0), time1(t1), radius(r), mat_ptr(mat) {}
+	virtual bool hit(const ray& r, float t_min, float t_max, hit_record& rec) const;
+	virtual bool bounding_box(float t0, float t1, aabb& box) const;
+	vec3 center(float time) const;
+	vec3 center0, center1;
+	float time0, time1;
+	float radius;
+	material* mat_ptr;
+};
+
+vec3 moving_sphere::center(float time) const {
+	return center0 + ((time - time0) / (time1 - time0)) * (center1 - center0);
+}
+
+bool moving_sphere::hit(const ray& r, float t_min, float t_max, hit_record& rec) const
+{
+	// Point is in sphere if it satifies:
+	// (x-c_x)^2 + (y-c_y)^2 + (z-c_z)^2 = R^2
+	// Where:
+	// (x,y,z) are the coordinates for the point
+	// (c_x, c_y, c_z) are the coordinates for the center of the sphere
+	// R is the radius of the sphere.
+	// Then we can see that this is equivalent to a dot procuct on the vector below with itself
+	// ((x-c_x), (y-c_y), (z-c_z))
+	// This vector is equivalent to the vector of the point - the vector of the center, so we have
+	// dot((p-c), (p-c)) = R^2
+	// Then substituting out point, which we get from the origin and direction of ray, scaled by (t)
+	// dot((p(t)-c), (p(t)-c)) = R^2
+	// dot((A+t*B-c), (A+t*B-c)) = R^2
+	// expanding this we get:
+	// t*t*dot(B,B) + 2*t*dot(B, A-C) + dot(A-C, A-C) - R*R = 0
+	// Since this is a quadratic equation in t, we can check the root inse the quadratic equation, and if we get a number:
+	// (d < 0) - No Solution, No intersections
+	// (d = 0) - 1 Solution, 1 intersection
+	// (d > 0) - 2 solutions, 2 intersections
+	vec3 oc = r.origin() - center(r.time());
+	float a = dot(r.direction(), r.direction());
+	float b = 2.0 * dot(oc, r.direction());
+	float c = dot(oc, oc) - radius * radius;
+	float discriminant = b * b - 4 * a * c;
+	if (discriminant > 0)
+	{
+		// t value for intersection point
+		float t = (-b - sqrt(discriminant)) / (2.0 * a);
+		if (t < t_max && t > t_min)
+		{
+			// Valid hit, save hit information in rec
+			rec.t = t;
+			rec.p = r.point_at_parameter(rec.t);
+			// normal vector for a sphere is in direction of hitpoint - center
+			// normalized to make shading easier.
+			rec.normal = (rec.p - center(r.time())) / radius;
+			rec.mat_ptr = mat_ptr;
+			return true;
+		}
+		// If (- discriminant) doesn't work, test second solution with (+ discriminant)
+		t = (-b + sqrt(discriminant)) / (2.0 * a);
+		if (t < t_max && t > t_min)
+		{
+			// Valid hit, save hit information in rec
+			rec.t = t;
+			rec.p = r.point_at_parameter(rec.t);
+			// normal vector for a sphere is in direction of hitpoint - center
+			// normalized to make shading easier.
+			rec.normal = (rec.p - center(r.time())) / radius;
+			rec.mat_ptr = mat_ptr;
+			return true;
+		}
+	}
+	// If neither works, no valid hit
+	return false;
+}
+
+bool moving_sphere::bounding_box(float t0, float t1, aabb& box) const {
+	// Creates box at t0 and t1, then surrounding box for those two
+	aabb box_small = aabb(center(t0) - vec3(radius, radius, radius), center(t0) + vec3(radius, radius, radius));
+	aabb box_large = aabb(center(t1) - vec3(radius, radius, radius), center(t1) + vec3(radius, radius, radius));
+	box = surrounding_box(box_small, box_large);
+	return true;
+}
+
+#endif // !MOVING_SPHERE_H
+
