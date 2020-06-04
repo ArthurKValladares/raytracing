@@ -217,146 +217,17 @@ vec3 get_color(const ray& r, hitable *world, int depth)
 	}
 }
 
-// EAch thread will write the first available row to them, then go write to the next free row
 void raytrace_and_write(hitable *world, camera *cam, int *buffer, 
-	int size_x, int size_y, int samples,
-	int* next_tile_x, int* next_tile_y, int tile_width, int tile_height,
-	std::mutex* tile_mutex) {
-	while (true) {
-		tile_mutex->lock();
-		int write_x = *next_tile_x;
-		int write_y = *next_tile_y;
-		*next_tile_x += tile_width;
-		if (*next_tile_x >= size_x) {
-			*next_tile_x = 0;
-			*next_tile_y += tile_height;
-		}
-		tile_mutex->unlock();
-		if (write_y >= size_y) {
-			return;
-		}
-		tile_width = tile_width - max_(0, (write_x + tile_width) - size_x);
-		tile_height = tile_height - max_(0, (write_y + tile_height) - size_y);
-		for (int pst_y = write_y; pst_y < write_y + tile_height; ++pst_y)
-		{
-			for (int pst_x = write_x; pst_x < write_x + tile_width; ++pst_x)
-			{
-				vec3 color(0, 0, 0);
-				// MSAA Anti-alliasing, taking size_s samples around the pixel, 
-				// and averaging their results.
-				for (int s = 0; s < samples; ++s) {
-					// percentage displacement of (x + random shift in range [0, 1))
-					float u = float(pst_x + random_double()) / float(size_x);
-					// percentage displacement of (y + random shift in range [0, 1))
-					float v = float(pst_y + random_double()) / float(size_y);
-					// The range [0, 1) is important because no matter what value we get,
-					// it will still be inside the same pixel we are processing, as we
-					// start our ray on the lower left corner of the pixel.
-
-					// Ray starting at camera, pointin at where we take our sample
-					ray r = cam->get_ray(u, v);
-					// p unused so far
-					vec3 p = r.point_at_parameter(2.0);
-					// Increment overall color of the pixel by color we get from this sample.
-					color += get_color(r, world, 0);
-				}
-				// Normalizing color so we get values in range [0,1]
-				color /= float(samples);
-				// CLOSELY RELATE TO THIS
-
-				// Gamma correcting our color with 'gamma 2'
-				// i.e, raising the color to the power 1/gamma, or 1/2
-				color = vec3(sqrt(color[0]), sqrt(color[1]), sqrt(color[2]));
-				int i_r = int(255.99 * color[0]);
-				int i_g = int(255.99 * color[1]);
-				int i_b = int(255.99 * color[2]);
-				//out_file << i_r << " " << i_g << " " << i_b << "\n";
-				int idx = ((size_y - 1) - pst_y) * size_x * 3 + pst_x * 3;
-				buffer[idx] = i_r;
-				buffer[idx + 1] = i_g;
-				buffer[idx + 2] = i_b;
-			}
-		}
-	}
-}
-
-int main()
-{
-	clock_t tStart = clock();
-
-	// Add way to chose seed later
-	std::ofstream out_file("output.ppm");
-	int size_x = 300;
-	int size_y = 300;
-	int size_s = 100;
-	out_file << "P3\n" << size_x << " " << size_y << "\n255\n";
-	hitable* world;
-	camera *cam;
-	float aspect = float(size_x) / float(size_y);
-	final(&world, &cam, aspect);
-	/*
-	// Vector position for Camera.
-	//vec3 look_from(13, 2, 3);
-	vec3 look_from(278, 278, -800);
-	// Vector position for where camera is pointing at
-	//vec3 look_at(0, 0, 0);
-	vec3 look_at(278, 278, 0);
-	// Vector that defines up direction for camera
-	// We project this vector on the plane orthogonal to the view direction
-	// to get a vector poitting "up"  from where camera is positioned.
-	vec3 vup(0, 1, 0);
-	float fov = 40.0;
-	//float dist_to_focus = (look_from - look_at).length();
-	float dist_to_focus = 10;
-	// Aperture is the diametrer of the camera hole. 
-	float aperture = 0.0;
-	// Time for camera goes from 0 to 1.
-	float time0 = 0.0;
-	float time1 = 1.0;
-	camera cam(look_from, look_at, vup, fov, float(size_x)/float(size_y), aperture, dist_to_focus, time0, time1);
-
-	// CAN THIS LOOP ALSO BE MULTITHREADED?
-	//hitable* world = random_scene(-2, 2, -2, 2, time0, time1);
-	//hitable* world = random_scene_blur(0, 0, 0, 0, time0, time1);
-	//hitable* world = two_spheres();
-	//hitable* world = two_perlin_spheres();
-	//hitable* world = earth();
-	//hitable* world = simple_light();
-	//hitable* world = cornell_smoke();
-	//hitable* world = final();
-	*/
-
-	int num_threads = std::thread::hardware_concurrency();
-	if (num_threads == 0) num_threads = 1;
-	std::thread* threads = new std::thread[num_threads];
-	int* buffer = new int[size_x * size_y * 3];
-	int next_x = 0;
-	int next_y = 0;
-	int tile_width = 32;
-	int tile_height = 32;
-	std::mutex tile_info;
-	for (size_t i = 0; i < num_threads; ++i) {
-		threads[i] = std::thread(raytrace_and_write, world, cam, buffer, size_x, size_y, size_s, &next_x, &next_y, tile_width, tile_height, &tile_info);
-	}
-	for (size_t i = 0; i < num_threads; ++i) {
-		threads[i].join();
-	}
-	// Write from buffer to file
-	for (size_t i = 0; i < size_x * size_y * 3; i += 3) {
-		out_file << buffer[i] << " " << buffer[i + 1] << " " << buffer[i + 2] << "\n";
-	}
-	// Write result to file
-	//stbi_write_bmp("output.bmp", size_x, size_y, 3, buffer);
-	delete[] buffer;
-	/*
-	for (int pst_y = size_y - 1; pst_y >= 0; --pst_y) 
+	                    int size_x, int size_y, int samples,
+	                    size_t start, size_t end) {
+	for (int pst_y = start; pst_y < end; ++pst_y)
 	{
 		for (int pst_x = 0; pst_x < size_x; ++pst_x)
 		{
 			vec3 color(0, 0, 0);
 			// MSAA Anti-alliasing, taking size_s samples around the pixel, 
 			// and averaging their results.
-			for (int s = 0; s < size_s; ++s) {
+			for (int s = 0; s < samples; ++s) {
 				// percentage displacement of (x + random shift in range [0, 1))
 				float u = float(pst_x + random_double()) / float(size_x);
 				// percentage displacement of (y + random shift in range [0, 1))
@@ -373,19 +244,61 @@ int main()
 				color += get_color(r, world, 0);
 			}
 			// Normalizing color so we get values in range [0,1]
-			color /= float(size_s);
+			color /= float(samples);
 			// CLOSELY RELATE TO THIS
-			
+
 			// Gamma correcting our color with 'gamma 2'
 			// i.e, raising the color to the power 1/gamma, or 1/2
 			color = vec3(sqrt(color[0]), sqrt(color[1]), sqrt(color[2]));
 			int i_r = int(255.99 * color[0]);
 			int i_g = int(255.99 * color[1]);
 			int i_b = int(255.99 * color[2]);
-			out_file << i_r << " " << i_g << " " << i_b << "\n";
+			//out_file << i_r << " " << i_g << " " << i_b << "\n"
+			int idx = ((size_y - 1) - pst_y) * size_x * 3 + pst_x * 3;
+			buffer[idx] = i_r;
+			buffer[idx + 1] = i_g;
+			buffer[idx + 2] = i_b;
 		}
 	}
-	*/
+}
+
+int main()
+{
+	clock_t tStart = clock();
+
+	// Add way to chose seed later
+	std::ofstream out_file("output.ppm");
+	int size_x = 500;
+	int size_y = 500;
+	int size_s = 2000;
+	out_file << "P3\n" << size_x << " " << size_y << "\n255\n";
+	hitable* world;
+	camera *cam;
+	float aspect = float(size_x) / float(size_y);
+	//final(&world, &cam, aspect);
+	cornell_box(&world, &cam, aspect);
+
+	int num_threads = std::thread::hardware_concurrency();
+	if (num_threads == 0) num_threads = 1;
+	size_t blocksize = size_y / num_threads;
+	std::vector<std::thread> threads;
+	int* buffer = new int[size_x * size_y * 3];
+	for (size_t i = 0; i < num_threads; ++i) {
+		size_t start = i * blocksize;
+		size_t end = (i + 1) * blocksize;
+		if (i == num_threads - 1) end = size_y;
+		threads.push_back(std::thread(raytrace_and_write, world, cam, buffer, size_x, size_y, size_s, start, end));
+	}
+	for (size_t i = 0; i < num_threads; ++i) {
+		threads[i].join();
+	}
+	// Write from buffer to file
+	for (size_t i = 0; i < size_x * size_y * 3; i += 3) {
+		out_file << buffer[i] << " " << buffer[i + 1] << " " << buffer[i + 2] << "\n";
+	}
+	// Write result to file
+	//stbi_write_bmp("output.bmp", size_x, size_y, 3, buffer);
+	delete[] buffer;
 	printf("Time taken: %.2fs\n", (double)(clock() - tStart) / CLOCKS_PER_SEC);
 
 	return 0;
